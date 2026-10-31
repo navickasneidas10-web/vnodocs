@@ -29,7 +29,7 @@ body.op{overflow:auto;background:#101010}
 .fstat.y{background:#ffc20e}
 .fstat.r{background:#c8102e}
 .fhead{position:absolute;background:#000;border-radius:6px}
-.fsep{position:absolute;display:flex;align-items:center;color:#ffc20e}
+.fsep{position:absolute;display:flex;align-items:center;color:#ff9f1c}
 /* operatorius */
 .op-wrap{font-family:'Open Sans',sans-serif;color:#e8e8e8;padding:16px 20px;max-width:1600px;margin:0 auto;font-size:14px}
 .op-wrap h2{margin:0 0 12px;font-size:20px}
@@ -601,10 +601,20 @@ function Board({kind,portrait}){
   if(!data.ready) return <Loading/>;
   const now=vnow(); const L=portrait?PL:LL; const C=colsFor(kind,portrait);
   const list=boardList(data,now);
-  const slots=[]; let sep=false;
-  list.forEach(f=>{ if(f.day>0&&!sep){ sep=true; if(slots.length) slots.push({sep:true}); } slots.push(f); });
-  const pages=Math.max(1,Math.ceil(slots.length/L.rows)); const page=Math.floor(cycle/2)%pages;
-  const vis=slots.slice(page*L.rows,page*L.rows+L.rows);
+  /* Puslapiai: prieš pirmą kitos dienos skrydį – „Kitos dienos skrydžiai“; kartojama puslapio viršuje */
+  const pagesArr=[]; let cur=[]; let seenT=false;
+  list.forEach(f=>{
+    if(cur.length>=L.rows){ pagesArr.push(cur); cur=[]; }
+    if(f.day>0&&(!seenT||cur.length===0)){
+      if(cur.length>=L.rows-1){ pagesArr.push(cur); cur=[]; }
+      cur.push({sep:true});
+    }
+    if(f.day>0) seenT=true;
+    cur.push(f);
+  });
+  if(cur.length) pagesArr.push(cur);
+  const pages=Math.max(1,pagesArr.length); const page=Math.floor(cycle/2)%pages;
+  const vis=pagesArr[page]||[];
 
   const header=<div className="fhead" style={{left:L.x,top:L.hy,width:L.w,height:L.hh,fontSize:L.hfs}}>
     {Object.keys(C).map(k=><div key={k} className="fcell" style={{left:C[k][0]+(k==='flight'?6:0),width:C[k][1]}}><Bi lt={HDR[k][0]} en={HDR[k][1]} align={HDR_ALIGN[k]}/></div>)}
