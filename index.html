@@ -142,10 +142,16 @@ function statusLabel(f){
 }
 
 /* Automatinis būsenų režimas (minutės iki išvykimo) */
-function autoStatus(dt,relEff){
-  if(dt>1440) return {s:'scheduled',t:null};
-  if(dt>150) return {s:'checkin_soon',t:fromMin(relEff-150)};
-  if(dt>40) return {s:'checkin',t:null};
+/* openRel – registracijos pradžia (minutės nuo šiandienos 00:00), jei nurodyta „Registracija nuo“ */
+function autoStatus(dt,relEff,openRel,nowM){
+  if(openRel!=null){
+    if(nowM<openRel) return (openRel-nowM>1440)?{s:'scheduled',t:null}:{s:'checkin_soon',t:fromMin(openRel)};
+    if(dt>40) return {s:'checkin',t:null};
+  } else {
+    if(dt>1440) return {s:'scheduled',t:null};
+    if(dt>150) return {s:'checkin_soon',t:fromMin(relEff-150)};
+    if(dt>40) return {s:'checkin',t:null};
+  }
   if(dt>30) return {s:'gate_open',t:null};
   if(dt>15) return {s:'boarding',t:null};
   if(dt>10) return {s:'final_call',t:null};
@@ -273,7 +279,10 @@ function enrich(f,data,now){
   if(est!=null&&est<sched-720) est+=1440;
   const rel=day*1440+sched, relEff=day*1440+(est!=null?est:sched);
   let status=f.status||'scheduled', stime=f.status_time||'';
-  if(f.auto&&status!=='cancelled'){ const a=autoStatus(relEff-now.mins,relEff); status=a.s; stime=a.t||''; }
+  if(f.auto&&status!=='cancelled'){
+    const om=toMin(f.checkin_open); let openRel=null;
+    if(om!=null){ openRel=day*1440+om; if(openRel>relEff) openRel-=1440; }
+    const a=autoStatus(relEff-now.mins,relEff,openRel,now.mins); status=a.s; stime=a.t||''; }
   if(status==='checkin_soon'&&!stime) stime=fromMin(relEff-150);
   if(status==='departed'&&!stime) stime=fromMin(relEff);
   const delayed=est!=null&&f.est_time&&f.est_time.slice(0,5)!==String(f.sched_time).slice(0,5);
@@ -717,7 +726,7 @@ function IdleScreen({lt,en,next}){
    ========================================================= */
 function clean(obj,keys){ const o={}; keys.forEach(k=>{ if(!(k in obj)) return; let v=obj[k]; if(v==='') v=null; if(k===PK_ID&&v==null) return; o[k]=v; }); return o; }
 const PK_ID='id';
-const FKEYS=['id','flight_no','airline_id','dest_iata','flight_date','sched_time','est_time','gate','desks','status','status_time','auto','hidden'];
+const FKEYS=['id','flight_no','airline_id','dest_iata','flight_date','sched_time','est_time','gate','desks','status','status_time','checkin_open','auto','hidden'];
 const QUICK=[['checkin','REG'],['checkin_closed','REG✕'],['gate_open','VART.'],['boarding','LAIP.'],['final_call','PASK.'],['gate_closed','UŽD.'],['departed','IŠSK.'],['cancelled','ATŠ.']];
 const errAlert=e=>alert('Klaida: '+(e&&e.message||e));
 
@@ -741,7 +750,7 @@ function FlightRow({f,data,isNew,onDone}){
     <td><input value={d.gate||''} onChange={e=>set('gate',e.target.value.toUpperCase())} style={{width:52}} placeholder="B9"/></td>
     <td>
       <label title="Automatinės būsenos pagal laiką" style={{display:'inline-flex',gap:4,alignItems:'center',marginRight:6}}><input type="checkbox" checked={!!d.auto} onChange={e=>set('auto',e.target.checked)}/>auto</label>
-      {d.auto?<span className="muted">{eff?(ST[eff.status]||{}).lt?.replace('{t}',eff.stime||''):'—'}</span>
+      {d.auto?<><label className="muted" title="Registracijos pradžia (tuščia – likus 2:30 iki išvykimo)">reg. nuo <input type="time" value={(d.checkin_open||'').slice(0,5)} onChange={e=>set('checkin_open',e.target.value)}/></label> <span className="muted">{eff?(ST[eff.status]||{}).lt?.replace('{t}',eff.stime||''):'—'}</span></>
       :<><select value={d.status||'scheduled'} onChange={e=>set('status',e.target.value)} style={{width:165}}>{STATUSES.map(([k,lt])=><option key={k} value={k}>{lt.replace(' {t}',' …')}</option>)}</select>
         {['checkin_soon','departed'].includes(d.status)&&<input type="time" value={(d.status_time||'').slice(0,5)} onChange={e=>set('status_time',e.target.value)} title="Būsenos laikas" style={{marginLeft:4}}/>}</>}
       <div>{QUICK.map(([k,l])=><button key={k} className={'chip'+(!d.auto&&d.status===k?' on':'')} onClick={()=>quick(k)}>{l}</button>)}</div>
@@ -773,7 +782,7 @@ const IMP_COLS=[
 const IMP_DEFAULT_ORDER=['flight_no','airline','dest','date','sched','est','desks','gate','status'];
 const normH=x=>String(x??'').trim().toLowerCase().replace(/[ąčęėįšųūž]/g,c=>({ą:'a',č:'c',ę:'e',ė:'e',į:'i',š:'s',ų:'u',ū:'u',ž:'z'}[c])).replace(/\s+/g,' ');
 const ST_ALIASES=(()=>{ const m={}; STATUSES.forEach(([k,lt,en])=>{ m[k]=k; m[normH(lt.replace(' {t}',''))]=k; m[normH(en.replace(' {t}',''))]=k; });
-  Object.assign(m,{'auto':'__auto','':'__auto','registracija':'checkin_soon','laipinimas':'boarding','pask. kvietimas':'final_call','paskutinis kvietimas':'final_call','last call':'final_call','iskrido':'departed','atsauktas':'cancelled','cancelled':'cancelled','canceled':'cancelled','veluoja':'delayed','delayed':'delayed'}); return m; })();
+  Object.assign(m,{'auto':'__auto','':'__auto','registracija':'checkin_soon','laipinimas':'boarding','pask. kvietimas':'final_call','paskutinis kvietimas':'final_call','last call':'final_call','iskrido':'departed','atsauktas':'cancelled','cancelled':'cancelled','canceled':'cancelled','veluoja':'delayed','delayed':'delayed','laiku':'__auto','on time':'__auto','registracija pradedama':'checkin_soon','check-in opens':'checkin_soon'}); return m; })();
 
 function parseTimeCell(v){
   if(v==null||v==='') return null;
@@ -836,10 +845,15 @@ function buildImport(rows,data,defDate){
     const date=parseDateCell(get(r,'date'),defDate); if(date===undefined) errs.push('bloga data');
     const sched=parseTimeCell(get(r,'sched')); if(!sched) errs.push('blogas laikas');
     const est=parseTimeCell(get(r,'est')); if(est===undefined) warn.push('neatpažintas patikslintas laikas');
-    const stRaw=normH(get(r,'status')); let status=ST_ALIASES[stRaw]; if(status===undefined){ warn.push('neatpažinta būsena → auto'); status='__auto'; }
+    const stFull=String(get(r,'status')??''); const stT=(stFull.match(/(\d{1,2})[:.](\d{2})/)||null);
+    const stTime=stT?pad(+stT[1])+':'+stT[2]:null;
+    const stRaw=normH(stFull.replace(/(\d{1,2})[:.](\d{2})/,'')).trim(); let status=ST_ALIASES[stRaw]; let checkinOpen=null, stTimeOut=null;
+    if(status===undefined){ warn.push('neatpažinta būsena → auto'); status='__auto'; }
+    if(status==='checkin_soon'){ if(stTime){ status='__auto'; checkinOpen=stTime; } }
+    else if(status!=='__auto') stTimeOut=stTime;
     const ex=data.flights.find(f=>String(f.flight_no).toUpperCase()===no&&String(f.flight_date).slice(0,10)===date);
     return {idx:idx+1,no,alCode,alName:alRaw&&alRaw.toUpperCase()!==alCode?alRaw:'',al,iata,destRaw,de,date,sched,est:est||null,
-      desks:String(get(r,'desks')??'').trim(),gate:String(get(r,'gate')??'').trim().toUpperCase(),status,ex,errs,warn};
+      desks:String(get(r,'desks')??'').trim(),gate:String(get(r,'gate')??'').trim().toUpperCase(),status,checkinOpen,stTimeOut,ex,errs,warn};
   });
   return {items,map};
 }
@@ -869,7 +883,8 @@ function ImportFlights({data,defDate,onClose}){
         return {...base,flight_no:i.no,airline_id:(i.al&&i.al.id)||(newAl[i.alCode]&&newAl[i.alCode].id)||null,dest_iata:i.iata||null,
           flight_date:i.date,sched_time:i.sched,est_time:i.est,desks:i.desks||null,gate:i.gate||null,
           status:auto?((mode==='update'&&i.ex&&i.ex.status)||'scheduled'):i.status,auto:auto?((mode==='update'&&i.ex)?!!i.ex.auto:true):false,
-          status_time:auto?null:((i.status==='departed')?(i.est||i.sched):null),hidden:false};
+          status_time:auto?null:(i.stTimeOut||((i.status==='departed')?(i.est||i.sched):null)),
+          checkin_open:i.checkinOpen||((mode==='update'&&i.ex)?(i.ex.checkin_open||null):null),hidden:false};
       });
       for(let k=0;k<fl.length;k+=200) await api.upsertMany('flights',fl.slice(k,k+200));
       setMsg(`Importuota ${fl.length} skrydž.${Object.keys(newAl).length?`, naujų oro linijų: ${Object.keys(newAl).length}`:''}${Object.keys(newDe).length?`, naujų krypčių: ${Object.keys(newDe).length}`:''}.`);
@@ -895,7 +910,7 @@ function ImportFlights({data,defDate,onClose}){
     <div className="muted" style={{marginTop:8,lineHeight:1.6}}>
       Pirma eilutė – antraštės, skyriklis <b>;</b> (tinka ir kablelis ar tab). Privaloma: <b>skrydis</b>, <b>kryptis</b> (IATA), <b>laikas</b> (HH:MM).
       Neprivaloma: <b>oro_linija</b> (kodas; jei tuščia – imama iš skrydžio nr.), <b>data</b> (YYYY-MM-DD arba DD.MM.YYYY; tuščia → {defDate}),
-      <b>patikslintas</b>, <b>registracija</b> (pvz. 13-14), <b>vartai</b>, <b>busena</b> (tuščia arba „auto“ – automatinis režimas; arba REGISTRUOJAMA, LAIPINAMA, PASK. KVIETIMAS, VARTAI UŽDARYTI, ATŠAUKTAS…).
+      <b>patikslintas</b>, <b>registracija</b> (pvz. 13-14), <b>vartai</b>, <b>busena</b> (tuščia, „auto“ arba „LAIKU“ – automatinis režimas; „REGISTRACIJA PRADEDAMA 05:35“ – auto su registracijos pradžia 05:35; arba REGISTRUOJAMA, LAIPINAMA, PASK. KVIETIMAS, VARTAI UŽDARYTI, ATŠAUKTAS…).
     </div>
     <div className="row" style={{marginTop:8}}>
       <span className="muted">Jei skrydis (nr. + data) jau yra:</span>
@@ -906,7 +921,7 @@ function ImportFlights({data,defDate,onClose}){
       <div style={{maxHeight:320,overflow:'auto'}}><table className="tbl"><thead><tr><th>#</th><th>Skrydis</th><th>Oro linija</th><th>Kryptis</th><th>Data</th><th>Laikas</th><th>Patiksl.</th><th>Registr.</th><th>Vartai</th><th>Būsena</th><th>Pastabos</th></tr></thead><tbody>
         {items.map(i=><tr key={i.idx} style={{background:i.errs.length?'#3a1414':i.warn.length?'#2e2a12':undefined}}>
           <td>{i.idx}</td><td>{i.no}</td><td>{i.al?i.al.code:i.alCode}</td><td>{i.iata}{i.de?<span className="muted"> {i.de.name_lt}</span>:null}</td><td>{i.date||'—'}</td><td>{i.sched||'—'}</td><td>{i.est||''}</td><td>{i.desks}</td><td>{i.gate}</td>
-          <td>{i.status==='__auto'?'auto':(ST[i.status]||{}).lt?.replace(' {t}','')}</td>
+          <td>{i.status==='__auto'?(i.checkinOpen?`auto · reg. nuo ${i.checkinOpen}`:'auto'):((ST[i.status]||{}).lt||'').replace('{t}',i.stTimeOut||'').trim()}</td>
           <td style={{fontSize:12}}>{i.ex&&<span style={{color:'#7cc4ff'}}>{mode==='update'?'atnaujins':mode==='skip'?'praleis':'dublikatas'} · </span>}<span style={{color:'#f77'}}>{i.errs.join(', ')}</span>{i.errs.length&&i.warn.length?' · ':''}<span style={{color:'#ec5'}}>{i.warn.join(', ')}</span></td>
         </tr>)}
       </tbody></table></div>
