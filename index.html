@@ -755,9 +755,170 @@ function FlightRow({f,data,isNew,onDone}){
   </tr>;
 }
 
+
+/* =========================================================
+   SKRYDŽIŲ IMPORTAS (CSV / Excel / įklijuota lentelė)
+   ========================================================= */
+const IMP_COLS=[
+  ['flight_no','Skrydis',['skrydis','skrydzio nr','skrydžio nr','reisas','flight','flight no','flight_no','flightno','nr','fltnr','flt']],
+  ['airline','Oro linija',['oro linija','oro linijos','airline','al','vezejas','vežėjas','carrier','kodas','oro_linija']],
+  ['dest','Kryptis',['kryptis','destination','dest','iata','to','i','miestas','city','dest_iata']],
+  ['date','Data',['data','date','diena','day','flight_date']],
+  ['sched','Laikas',['laikas','time','std','sched','sched_time','isvykimas','išvykimas','departure']],
+  ['est','Patikslintas',['patikslintas','patiksl','est','etd','est_time','naujas laikas','updated']],
+  ['desks','Registr.',['registr','registr.','registracija','desks','desk','check-in','checkin','stalai','stalas']],
+  ['gate','Vartai',['vartai','gate','gates']],
+  ['status','Būsena',['busena','būsena','status']],
+];
+const IMP_DEFAULT_ORDER=['flight_no','airline','dest','date','sched','est','desks','gate','status'];
+const normH=x=>String(x??'').trim().toLowerCase().replace(/[ąčęėįšųūž]/g,c=>({ą:'a',č:'c',ę:'e',ė:'e',į:'i',š:'s',ų:'u',ū:'u',ž:'z'}[c])).replace(/\s+/g,' ');
+const ST_ALIASES=(()=>{ const m={}; STATUSES.forEach(([k,lt,en])=>{ m[k]=k; m[normH(lt.replace(' {t}',''))]=k; m[normH(en.replace(' {t}',''))]=k; });
+  Object.assign(m,{'auto':'__auto','':'__auto','registracija':'checkin_soon','laipinimas':'boarding','pask. kvietimas':'final_call','paskutinis kvietimas':'final_call','last call':'final_call','iskrido':'departed','atsauktas':'cancelled','cancelled':'cancelled','canceled':'cancelled','veluoja':'delayed','delayed':'delayed'}); return m; })();
+
+function parseTimeCell(v){
+  if(v==null||v==='') return null;
+  if(typeof v==='number'){ if(v>=0&&v<1){ return fromMin(Math.round(v*1440)); } if(v>=1&&v<100000&&v%1){ return fromMin(Math.round((v%1)*1440)); } }
+  if(v instanceof Date) return pad(v.getHours())+':'+pad(v.getMinutes());
+  const s=String(v).trim(); let m=s.match(/(\d{1,2})[:.h](\d{2})/); if(m&&+m[1]<24&&+m[2]<60) return pad(+m[1])+':'+m[2];
+  m=s.match(/^(\d{3,4})$/); if(m){ const t=m[1].padStart(4,'0'); if(+t.slice(0,2)<24&&+t.slice(2)<60) return t.slice(0,2)+':'+t.slice(2); }
+  return undefined; // klaida
+}
+function parseDateCell(v,fallback){
+  if(v==null||v==='') return fallback;
+  if(typeof v==='number'&&v>20000&&v<80000){ return new Date(Date.UTC(1899,11,30)+Math.floor(v)*864e5).toISOString().slice(0,10); }
+  if(v instanceof Date) return `${v.getFullYear()}-${pad(v.getMonth()+1)}-${pad(v.getDate())}`;
+  const s=String(v).trim(); let m;
+  if((m=s.match(/^(\d{4})[-./](\d{1,2})[-./](\d{1,2})/))) return `${m[1]}-${pad(+m[2])}-${pad(+m[3])}`;
+  if((m=s.match(/^(\d{1,2})[-./](\d{1,2})[-./](\d{4})/))) return `${m[3]}-${pad(+m[2])}-${pad(+m[1])}`;
+  if((m=s.match(/^(\d{1,2})[-./](\d{1,2})[-./](\d{2})$/))) return `20${m[3]}-${pad(+m[2])}-${pad(+m[1])}`;
+  if((m=s.match(/^(\d{1,2})[-./](\d{1,2})$/))) return `${String(fallback).slice(0,4)}-${pad(+m[2])}-${pad(+m[1])}`;
+  if(/^(siandien|šiandien|today)$/i.test(s)) return vnow().date;
+  if(/^(rytoj|tomorrow)$/i.test(s)) return addDays(vnow().date,1);
+  return undefined;
+}
+/* Tekstas → eilučių masyvas (tab, ; arba , skyrikliai, kabutės) */
+function parseDelimited(txt){
+  txt=String(txt||'').replace(/^﻿/,'').replace(/\r\n?/g,'\n').trim(); if(!txt) return [];
+  const first=txt.split('\n')[0];
+  const cnt=ch=>(first.match(new RegExp('\\'+ch,'g'))||[]).length;
+  const del=cnt('\t')?'\t':(cnt(';')>=cnt(',')&&cnt(';'))?';':',';
+  const rows=[]; let row=[],cell='',q=false;
+  for(let i=0;i<txt.length;i++){ const c=txt[i];
+    if(q){ if(c==='"'){ if(txt[i+1]==='"'){cell+='"';i++;} else q=false; } else cell+=c; }
+    else if(c==='"'&&cell==='') q=true;
+    else if(c===del){ row.push(cell); cell=''; }
+    else if(c==='\n'){ row.push(cell); rows.push(row); row=[]; cell=''; }
+    else cell+=c; }
+  row.push(cell); rows.push(row);
+  return rows.filter(r=>r.some(c=>String(c).trim()!==''));
+}
+function buildImport(rows,data,defDate){
+  if(!rows.length) return {items:[],map:{}};
+  // antraštė?
+  const head=rows[0].map(normH); const map={};
+  IMP_COLS.forEach(([k,,al])=>{ const i=head.findIndex(h=>al.some(a=>h===normH(a)||h.startsWith(normH(a)))); if(i>=0&&!Object.values(map).includes(i)) map[k]=i; });
+  let body=rows;
+  if(Object.keys(map).length>=2&&('flight_no' in map||'sched' in map)) body=rows.slice(1);
+  else { Object.keys(map).forEach(k=>delete map[k]); IMP_DEFAULT_ORDER.forEach((k,i)=>{ if(i<rows[0].length) map[k]=i; }); }
+  const get=(r,k)=>map[k]==null?'':r[map[k]];
+  const items=body.map((r,idx)=>{
+    const errs=[],warn=[];
+    const no=String(get(r,'flight_no')??'').toUpperCase().replace(/\s+/g,'');
+    if(!no) errs.push('nėra skrydžio nr.');
+    let alRaw=String(get(r,'airline')??'').trim();
+    let alCode=(alRaw||no.match(/^([A-Z0-9]{2})/)?.[1]||'').toUpperCase();
+    let al=data.airlines.find(a=>String(a.code).toUpperCase()===alCode)||data.airlines.find(a=>normH(a.name)===normH(alRaw));
+    if(!al&&alCode) warn.push(`nauja oro linija ${alCode}`);
+    const destRaw=String(get(r,'dest')??'').trim();
+    let dm=destRaw.match(/\b([A-Z]{3})\b/); let iata=dm?dm[1]:destRaw.toUpperCase().slice(0,3);
+    let de=data.destinations.find(d=>d.iata===iata)||data.destinations.find(d=>normH(d.name_lt)===normH(destRaw)||normH(d.name_en)===normH(destRaw));
+    if(de) iata=de.iata; else if(destRaw) warn.push(`nauja kryptis ${iata}`); else errs.push('nėra krypties');
+    const date=parseDateCell(get(r,'date'),defDate); if(date===undefined) errs.push('bloga data');
+    const sched=parseTimeCell(get(r,'sched')); if(!sched) errs.push('blogas laikas');
+    const est=parseTimeCell(get(r,'est')); if(est===undefined) warn.push('neatpažintas patikslintas laikas');
+    const stRaw=normH(get(r,'status')); let status=ST_ALIASES[stRaw]; if(status===undefined){ warn.push('neatpažinta būsena → auto'); status='__auto'; }
+    const ex=data.flights.find(f=>String(f.flight_no).toUpperCase()===no&&String(f.flight_date).slice(0,10)===date);
+    return {idx:idx+1,no,alCode,alName:alRaw&&alRaw.toUpperCase()!==alCode?alRaw:'',al,iata,destRaw,de,date,sched,est:est||null,
+      desks:String(get(r,'desks')??'').trim(),gate:String(get(r,'gate')??'').trim().toUpperCase(),status,ex,errs,warn};
+  });
+  return {items,map};
+}
+
+const IMP_EXAMPLE=d=>`skrydis;oro_linija;kryptis;data;laikas;patikslintas;registracija;vartai;busena
+FR542;FR;BER;${d};08:55;;13-14;A1;auto
+W61933;W6;BUD;${d};08:55;;14-15;A16;auto
+QU7023;QU;HRG;${d};10:30;11:40;28-30;B9;auto
+TK1408;TK;IST;${d};10:30;;10-12;B7;REGISTRUOJAMA
+BT969;BT;RIX;${d};10:40;;4-5;A4;`;
+
+function ImportFlights({data,defDate,onClose}){
+  const [txt,setTxt]=useState(''); const [busy,setBusy]=useState(false);
+  const [mode,setMode]=useState('update'); const [msg,setMsg]=useState('');
+  const {items}=buildImport(parseDelimited(txt),data,defDate);
+  const ok=items.filter(i=>!i.errs.length);
+  const doImport=async()=>{
+    if(!ok.length) return; setBusy(true); setMsg('');
+    try{
+      const newAl={}; ok.forEach(i=>{ if(!i.al&&i.alCode&&!newAl[i.alCode]) newAl[i.alCode]={id:uuid(),code:i.alCode,name:i.alName||i.alCode,color:'#444444'}; });
+      if(Object.keys(newAl).length) await api.upsertMany('airlines',Object.values(newAl));
+      const newDe={}; ok.forEach(i=>{ if(!i.de&&i.iata&&!newDe[i.iata]){ const nm=i.destRaw.replace(/\b[A-Z]{3}\b/,'').trim()||i.iata; newDe[i.iata]={iata:i.iata,name_lt:nm,name_en:nm}; } });
+      if(Object.keys(newDe).length) await api.upsertMany('destinations',Object.values(newDe));
+      const fl=ok.filter(i=>!(mode==='skip'&&i.ex)).map(i=>{
+        const base=(mode==='update'&&i.ex)?{id:i.ex.id}:{id:uuid()};
+        const auto=i.status==='__auto';
+        return {...base,flight_no:i.no,airline_id:(i.al&&i.al.id)||(newAl[i.alCode]&&newAl[i.alCode].id)||null,dest_iata:i.iata||null,
+          flight_date:i.date,sched_time:i.sched,est_time:i.est,desks:i.desks||null,gate:i.gate||null,
+          status:auto?((mode==='update'&&i.ex&&i.ex.status)||'scheduled'):i.status,auto:auto?((mode==='update'&&i.ex)?!!i.ex.auto:true):false,
+          status_time:auto?null:((i.status==='departed')?(i.est||i.sched):null),hidden:false};
+      });
+      for(let k=0;k<fl.length;k+=200) await api.upsertMany('flights',fl.slice(k,k+200));
+      setMsg(`Importuota ${fl.length} skrydž.${Object.keys(newAl).length?`, naujų oro linijų: ${Object.keys(newAl).length}`:''}${Object.keys(newDe).length?`, naujų krypčių: ${Object.keys(newDe).length}`:''}.`);
+      setTxt('');
+    }catch(e){ setMsg('Klaida: '+e.message); }
+    setBusy(false);
+  };
+  return <div className="card" style={{borderColor:'#ffc20e55'}}>
+    <div className="row" style={{marginBottom:8}}><h3 style={{margin:0}}>Skrydžių importas (CSV tekstas)</h3><span style={{flex:1}}/>
+      <button className="btn" onClick={onClose}>Uždaryti ✕</button></div>
+    <div className="row" style={{alignItems:'stretch'}}>
+      <div style={{flex:1,minWidth:340}}>
+        <div className="muted" style={{marginBottom:4}}>Įklijuok čia:</div>
+        <textarea value={txt} onChange={e=>setTxt(e.target.value)} spellCheck={false}
+          style={{width:'100%',height:170,background:'#1d1d1d',color:'#eee',border:'1px solid #3a3a3a',borderRadius:6,padding:8,fontFamily:'monospace',fontSize:12}}/>
+      </div>
+      <div style={{flex:1,minWidth:340}}>
+        <div className="row" style={{justifyContent:'space-between',marginBottom:4}}><span className="muted">Pavyzdys, kaip turi atrodyti:</span>
+          <button className="btn" style={{padding:'2px 8px',fontSize:12}} onClick={()=>setTxt(IMP_EXAMPLE(defDate))}>Įterpti pavyzdį</button></div>
+        <pre style={{margin:0,height:170,overflow:'auto',background:'#0c0c0c',border:'1px solid #2a2a2a',borderRadius:6,padding:8,fontSize:12,color:'#cfc'}}>{IMP_EXAMPLE(defDate)}</pre>
+      </div>
+    </div>
+    <div className="muted" style={{marginTop:8,lineHeight:1.6}}>
+      Pirma eilutė – antraštės, skyriklis <b>;</b> (tinka ir kablelis ar tab). Privaloma: <b>skrydis</b>, <b>kryptis</b> (IATA), <b>laikas</b> (HH:MM).
+      Neprivaloma: <b>oro_linija</b> (kodas; jei tuščia – imama iš skrydžio nr.), <b>data</b> (YYYY-MM-DD arba DD.MM.YYYY; tuščia → {defDate}),
+      <b>patikslintas</b>, <b>registracija</b> (pvz. 13-14), <b>vartai</b>, <b>busena</b> (tuščia arba „auto“ – automatinis režimas; arba REGISTRUOJAMA, LAIPINAMA, PASK. KVIETIMAS, VARTAI UŽDARYTI, ATŠAUKTAS…).
+    </div>
+    <div className="row" style={{marginTop:8}}>
+      <span className="muted">Jei skrydis (nr. + data) jau yra:</span>
+      <select value={mode} onChange={e=>setMode(e.target.value)}><option value="update">atnaujinti esamą</option><option value="skip">praleisti</option><option value="dup">kurti naują</option></select>
+    </div>
+    {items.length>0&&<>
+      <p className="muted" style={{margin:'8px 0'}}>Tinkamų: <b style={{color:'#9f9'}}>{ok.length}</b> / {items.length}{items.length-ok.length?<> · su klaidomis: <b style={{color:'#f77'}}>{items.length-ok.length}</b> (nebus importuoti)</>:null}</p>
+      <div style={{maxHeight:320,overflow:'auto'}}><table className="tbl"><thead><tr><th>#</th><th>Skrydis</th><th>Oro linija</th><th>Kryptis</th><th>Data</th><th>Laikas</th><th>Patiksl.</th><th>Registr.</th><th>Vartai</th><th>Būsena</th><th>Pastabos</th></tr></thead><tbody>
+        {items.map(i=><tr key={i.idx} style={{background:i.errs.length?'#3a1414':i.warn.length?'#2e2a12':undefined}}>
+          <td>{i.idx}</td><td>{i.no}</td><td>{i.al?i.al.code:i.alCode}</td><td>{i.iata}{i.de?<span className="muted"> {i.de.name_lt}</span>:null}</td><td>{i.date||'—'}</td><td>{i.sched||'—'}</td><td>{i.est||''}</td><td>{i.desks}</td><td>{i.gate}</td>
+          <td>{i.status==='__auto'?'auto':(ST[i.status]||{}).lt?.replace(' {t}','')}</td>
+          <td style={{fontSize:12}}>{i.ex&&<span style={{color:'#7cc4ff'}}>{mode==='update'?'atnaujins':mode==='skip'?'praleis':'dublikatas'} · </span>}<span style={{color:'#f77'}}>{i.errs.join(', ')}</span>{i.errs.length&&i.warn.length?' · ':''}<span style={{color:'#ec5'}}>{i.warn.join(', ')}</span></td>
+        </tr>)}
+      </tbody></table></div>
+      <div className="row" style={{marginTop:10}}><button className="btn pri" disabled={busy||!ok.length} onClick={doImport}>{busy?'Importuojama…':`Importuoti ${ok.length} skrydž.`}</button></div>
+    </>}
+    {msg&&<p style={{color:msg.startsWith('Klaida')?'#f77':'#9f9'}}>{msg}</p>}
+  </div>;
+}
+
 function FlightsTab({data}){
   const today=vnow().date;
-  const [date,setDate]=useState(today); const [all,setAll]=useState(false); const [adding,setAdding]=useState(false);
+  const [date,setDate]=useState(today); const [all,setAll]=useState(false); const [adding,setAdding]=useState(false); const [imp,setImp]=useState(false);
   const flights=data.flights.filter(f=>all||String(f.flight_date).slice(0,10)===date)
     .sort((a,b)=>String(a.flight_date).localeCompare(String(b.flight_date))||String(a.sched_time).localeCompare(String(b.sched_time)));
   const copyNext=async()=>{ const src=data.flights.filter(f=>String(f.flight_date).slice(0,10)===date); if(!src.length) return;
@@ -772,8 +933,10 @@ function FlightsTab({data}){
       <label className="row" style={{gap:4}}><input type="checkbox" checked={all} onChange={e=>setAll(e.target.checked)}/>visos dienos</label>
       <span style={{flex:1}}/>
       <button className="btn" onClick={copyNext}>Kopijuoti dieną → rytojų</button>
+      <button className="btn" onClick={()=>setImp(v=>!v)}>⤒ Importuoti</button>
       <button className="btn pri" onClick={()=>setAdding(true)}>+ Naujas skrydis</button>
     </div>
+    {imp&&<ImportFlights data={data} defDate={date} onClose={()=>setImp(false)}/>}
     <div style={{overflowX:'auto'}}>
     <table className="tbl"><thead><tr><th>Data</th><th>Skrydis</th><th>Oro linija</th><th>Kryptis</th><th>Laikas</th><th>Patiksl.</th><th>Registr.</th><th>Vartai</th><th>Būsena</th><th>Slėpti</th><th></th></tr></thead>
     <tbody>
