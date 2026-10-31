@@ -291,7 +291,6 @@ function enrich(f,data,now){
 function boardList(data,now){
   return data.flights.filter(f=>!f.hidden&&f.flight_date).map(f=>enrich(f,data,now)).filter(f=>{
     if(f.day<-1||f.day>1) return false;
-    if(f.rel-now.mins>1440) return false;
     if(f.status==='departed') return f.relEff-now.mins>-20;
     if(f.status==='cancelled') return f.rel-now.mins>-20;
     return f.relEff-now.mins>-180;
