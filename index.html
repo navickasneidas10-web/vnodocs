@@ -612,8 +612,9 @@ function Board({kind,portrait}){
     cur.push(f);
   });
   if(cur.length) pagesArr.push(cur);
-  const pages=Math.max(1,pagesArr.length); const page=Math.floor(cycle/2)%pages;
-  const vis=pagesArr[page]||[];
+  /* Rodomi tik artimiausi skrydžiai, kurie telpa (be puslapių) */
+  const pages=1; const page=0;
+  const vis=pagesArr[0]||[];
 
   const header=<div className="fhead" style={{left:L.x,top:L.hy,width:L.w,height:L.hh,fontSize:L.hfs}}>
     {Object.keys(C).map(k=><div key={k} className="fcell" style={{left:C[k][0]+(k==='flight'?6:0),width:C[k][1]}}><Bi lt={HDR[k][0]} en={HDR[k][1]} align={HDR_ALIGN[k]}/></div>)}
