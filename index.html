@@ -27,7 +27,7 @@ body.op{overflow:auto;background:#101010}
 .fcell{position:absolute;top:0;bottom:0;display:flex;align-items:center}
 .fstat{position:absolute;background:#2b2b2b;border-radius:8px;display:flex;align-items:center;padding:0 12px}
 .fstat.y{background:#ffc20e}
-.fstat.r{background:#c8102e}
+.fstat.y{color:#000}
 .fhead{position:absolute;background:#000;border-radius:6px}
 .fsep{position:absolute;display:flex;align-items:center;color:#ff9f1c}
 /* operatorius */
@@ -131,7 +131,7 @@ const STATUSES=[
   ['cancelled','ATŠAUKTAS','CANCELLED'],
 ];
 const ST=Object.fromEntries(STATUSES.map(([k,lt,en])=>[k,{k,lt,en}]));
-const HL={final_call:'y',gate_change:'y',cancelled:'r'};
+const HL={final_call:'y',gate_change:'y',cancelled:'y',delayed:'y'};
 const GATE_PHASE=new Set(['gate_open','boarding','final_call','gate_closed','gate_change']);
 const DESK_PHASE=new Set(['checkin_soon','checkin','checkin_closed','delayed']);
 
@@ -311,7 +311,7 @@ function pickGate(data,now,gate){
 }
 function pickDesk(data,now,desk){
   const D=String(desk).toUpperCase(); const ov=getOv(data,'desk:'+D);
-  if(ov&&ov.mode==='off') return {cur:null,ov};
+  if(ov&&(ov.mode==='off'||ov.mode==='image')) return {cur:null,ov};
   if(ov&&ov.mode==='flight'&&ov.flight_id){ const f=data.flights.find(x=>x.id===ov.flight_id); if(f) return {cur:enrich(f,data,now),ov}; }
   const pr={checkin:0,delayed:1,checkin_closed:2,checkin_soon:3};
   const list=boardList(data,now).filter(f=>expandList(f.desks).includes(D)&&DESK_PHASE.has(f.status))
@@ -689,7 +689,7 @@ function GateScreen({gate}){
     </div>
     <WeatherTag de={f.de} style={{position:'absolute',left:1200,top:566,width:180}}/>
     <NextBox next={next}/>
-    {showS&&<div style={{position:'absolute',left:80,top:846,width:1300,fontSize:118,color:s.hl==='y'?Y:s.hl==='r'?'#ff4d4d':'#fff'}}><Bi lt={s.lt} en={s.en}/></div>}
+    {showS&&<div style={{position:'absolute',left:80,top:846,width:1300,fontSize:118,color:s.hl?Y:'#fff'}}><Bi lt={s.lt} en={s.en}/></div>}
     <div style={{position:'absolute',right:100,top:800,height:260,lineHeight:'260px',fontSize:240}}>{gate}</div>
   </Stage>;
 }
@@ -697,10 +697,19 @@ function GateScreen({gate}){
 /* =========================================================
    9. REGISTRACIJOS STALO EKRANAS
    ========================================================= */
+/* Pilno ekrano nuotrauka (stalo ekranui) */
+function ImageScreen({url,fit}){
+  return <Stage w={1920} h={1080}>
+    <img src={url} alt="" style={{position:'absolute',inset:0,width:1920,height:1080,objectFit:fit||'cover',display:'block'}}/>
+  </Stage>;
+}
 function DeskScreen({desk}){
   const data=useData(); useTicker(15000);
   if(!data.ready) return <Loading/>;
-  const now=vnow(); const {cur:f,ov}=pickDesk(data,now,desk);
+  const now=vnow();
+  const ovI=getOv(data,'desk:'+String(desk).toUpperCase());
+  if(ovI&&ovI.mode==='image'&&ovI.image_url) return <ImageScreen url={ovI.image_url} fit={ovI.image_fit}/>;
+  const {cur:f,ov}=pickDesk(data,now,desk);
   if(!f) return <IdleScreen lt={`REGISTRACIJA ${desk}`} en={`CHECK-IN ${desk}`}/>;
   const s=statusLabel(f);
   const note=ov&&(ov.text_lt||ov.text_en);
@@ -717,7 +726,7 @@ function DeskScreen({desk}){
       </>:<div style={{fontSize:84,lineHeight:'110px',marginTop:30}}>{f.sched_time}</div>}
     </div>
     <div style={{position:'absolute',left:40,top:520,width:1840,fontSize:190}}><Bi lt={`${f.de.name_lt} ${f.de.iata}`.toUpperCase()} en={`${f.de.name_en} ${f.de.iata}`.toUpperCase()} align="center"/></div>
-    {s&&<div style={{position:'absolute',left:40,top:806,width:1840,fontSize:104,color:s.hl==='r'?'#ff4d4d':'#fff'}}><Bi lt={s.lt} en={s.en} align="center"/></div>}
+    {s&&<div style={{position:'absolute',left:40,top:806,width:1840,fontSize:104,color:s.hl?Y:'#fff'}}><Bi lt={s.lt} en={s.en} align="center"/></div>}
     {note&&<div style={{position:'absolute',left:40,top:986,width:1840,fontSize:62,color:Y}}><Bi lt={ov.text_lt||ov.text_en} en={ov.text_en||ov.text_lt} align="center"/></div>}
   </Stage>;
 }
@@ -1044,8 +1053,12 @@ function DestTab({data}){
   </div>;
 }
 
+const OVK=['key','mode','flight_id','text_lt','text_en','image_url','image_fit'];
 function OvRow({k,label,data,autoTxt,link}){
-  const ov=getOv(data,k)||{key:k,mode:'auto',flight_id:null,text_lt:'',text_en:''};
+  const ov=getOv(data,k)||{key:k,mode:'auto',flight_id:null,text_lt:'',text_en:'',image_url:null,image_fit:'cover'};
+  const isDesk=k.startsWith('desk');
+  const upImg=async file=>{ try{ const url=await api.uploadLogo(file,false); const row={...d,image_url:url,mode:'image'}; setD(row);
+    await api.upsert('overrides',clean(row,OVK)); }catch(e){errAlert(e);} };
   const [d,setD]=useState(ov); useEffect(()=>setD(ov),[JSON.stringify(ov)]);
   const set=(kk,v)=>setD(o=>({...o,[kk]:v}));
   const dirty=JSON.stringify(d)!==JSON.stringify(ov);
@@ -1054,11 +1067,16 @@ function OvRow({k,label,data,autoTxt,link}){
   return <tr>
     <td><b>{label}</b></td>
     <td className="muted">{autoTxt||'—'}</td>
-    <td><select value={d.mode||'auto'} onChange={e=>set('mode',e.target.value)}><option value="auto">Automatiškai</option><option value="flight">Konkretus skrydis</option><option value="off">Išjungta (laisva)</option></select>
+    <td><select value={d.mode||'auto'} onChange={e=>set('mode',e.target.value)}><option value="auto">Automatiškai</option><option value="flight">Konkretus skrydis</option><option value="off">Išjungta (laisva)</option>{isDesk&&<option value="image">Nuotrauka</option>}</select>
+      {d.mode==='image'&&<div className="row" style={{marginTop:4,gap:6}}>
+        {d.image_url&&<img src={d.image_url} style={{width:96,height:54,objectFit:d.image_fit||'cover',background:'#000',border:'1px solid #333'}}/>}
+        <LogoInput label={d.image_url?'Keisti nuotrauką':'Įkelti nuotrauką'} onFile={upImg}/>
+        <select value={d.image_fit||'cover'} onChange={e=>set('image_fit',e.target.value)}><option value="cover">Užpildyti ekraną</option><option value="contain">Tilpti visa</option><option value="fill">Ištempti</option></select>
+      </div>}
       {d.mode==='flight'&&<select value={d.flight_id||''} onChange={e=>set('flight_id',e.target.value)} style={{marginLeft:4}}><option value="">—</option>{fl.map(f=><option key={f.id} value={f.id}>{String(f.sched_time).slice(0,5)} {f.flight_no} {f.dest_iata}</option>)}</select>}</td>
     {k.startsWith('desk')&&<td><input value={d.text_lt||''} onChange={e=>set('text_lt',e.target.value)} placeholder="pvz. VERSLO KLASĖ" style={{width:130}}/> <input value={d.text_en||''} onChange={e=>set('text_en',e.target.value)} placeholder="BUSINESS CLASS" style={{width:130}}/></td>}
     {!k.startsWith('desk')&&<td/>}
-    <td style={{whiteSpace:'nowrap'}}><button className={'btn'+(dirty?' dirty':'')} onClick={()=>api.upsert('overrides',clean(d,['key','mode','flight_id','text_lt','text_en'])).catch(errAlert)}>Išsaugoti</button> <a className="lnk" href={link} target="_blank">atidaryti ↗</a></td>
+    <td style={{whiteSpace:'nowrap'}}><button className={'btn'+(dirty?' dirty':'')} onClick={()=>{ if(d.mode==='image'&&!d.image_url) return alert('Įkelk nuotrauką'); api.upsert('overrides',clean(d,OVK)).catch(errAlert); }}>Išsaugoti</button> <a className="lnk" href={link} target="_blank">atidaryti ↗</a></td>
   </tr>;
 }
 function ScreensTab({data}){
