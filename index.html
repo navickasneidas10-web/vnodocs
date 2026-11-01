@@ -75,11 +75,12 @@ const {useState,useEffect,useRef,useLayoutEffect,useCallback}=React;
    pultelyje → Nustatymai). Jei tušti – veikia vietinis
    demo režimas (localStorage, sinchronizacija tarp skirtukų).
    ========================================================= */
-const SUPABASE_URL = '';
-const SUPABASE_ANON_KEY = '';
+const SUPABASE_URL = 'https://rrgdqyopigmycmyzcvpa.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_bhQLtGP5sAMFnNU4kxcx8Q_Lr8bWqJb';
 
 const TZ='Europe/Vilnius';
 const LANG_MS=25000;   // kalbos keitimo intervalas (ms)
+const MAX_PAGES=3;     // kiek artimiausių puslapių rodo bendros lentos
 const MQ_PASSES=3;     // kiek kartų netelpantis tekstas praslenka per vieną kalbos ciklą (daugiau = greičiau)
 const Y='#ffc20e';
 
@@ -612,9 +613,9 @@ function Board({kind,portrait}){
     cur.push(f);
   });
   if(cur.length) pagesArr.push(cur);
-  /* Rodomi tik artimiausi skrydžiai, kurie telpa (be puslapių) */
-  const pages=1; const page=0;
-  const vis=pagesArr[0]||[];
+  /* Keičiasi tik per artimiausius MAX_PAGES puslapius (kas 2 kalbos ciklus) */
+  const pages=Math.max(1,Math.min(MAX_PAGES,pagesArr.length)); const page=Math.floor(cycle/2)%pages;
+  const vis=pagesArr[page]||[];
 
   const header=<div className="fhead" style={{left:L.x,top:L.hy,width:L.w,height:L.hh,fontSize:L.hfs}}>
     {Object.keys(C).map(k=><div key={k} className="fcell" style={{left:C[k][0]+(k==='flight'?6:0),width:C[k][1]}}><Bi lt={HDR[k][0]} en={HDR[k][1]} align={HDR_ALIGN[k]}/></div>)}
